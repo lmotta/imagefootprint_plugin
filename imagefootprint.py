@@ -162,7 +162,7 @@ class Footprint():
     self.hasValidPixels = hasValidPixels
     self.metadata = {}
     self.srsTransform = self.crsDescripTransform = self.msgError = None
-    self.killed = False
+    self.isKilled = False
     if not wktSRS is None:
       self.srsTransform = osr.SpatialReference()
       self.srsTransform.ImportFromWkt( wktSRS )
@@ -421,6 +421,87 @@ class Footprint():
   def kill(self):
     self.isKilled = True
 
+class WorkerPopulateCatalog(QtCore.QObject):
+  
+  finished = QtCore.pyqtSignal(int, bool)
+  processedFootprint = QtCore.pyqtSignal()
+
+  def __init__(self, layerCatalog):
+    super(WorkerPopulateCatalog, self).__init__()
+    self.layerCatalog = layerCatalog
+    self.isKilled = False
+    self.foot = self.featTemplate = self.lstSources = self.ct = None
+
+  def setData(self, data):
+    self.lstSources = data[ 'sources' ]
+    self.featTemplate = data[ 'feature' ]
+    self.ct = QgsCore.QgsCoordinateTransform()
+    self.ct.setDestCRS( data['crsLayer'] )
+    self.foot = Footprint( data['hasValidPixels'], data['wktCrsImages'] )
+
+  @QtCore.pyqtSlot()
+  def run(self):
+    def setFeatureAttributes(feat, filename, metadata):
+      def getHtmlTreeMetadata(value, html):
+        if isinstance( value, dict ):
+          html += "<ul>"
+          for key, val in sorted( value.iteritems() ):
+            if not isinstance( val, dict ):
+              html += "<li>%s: %s</li> " % ( key, val )
+            else:
+              html += "<li>%s</li> " % key
+            html = getHtmlTreeMetadata( val, html )
+          html += "</ul>"
+          return html
+        return html
+
+      feat.setAttribute('filename',  filename )
+      feat.setAttribute('name', os.path.basename( filename ) )
+      html = getHtmlTreeMetadata(metadata, '')
+      feat.setAttribute('meta_html',html )
+      vjson = json.dumps( metadata )
+      feat.setAttribute('meta_json', vjson )
+      feat.setAttribute('meta_jsize', len( vjson) )
+
+    totalError = 0
+    for i in xrange( len( self.lstSources ) ):
+      feat = QgsCore.QgsFeature( self.featTemplate )
+      if self.foot.calculate( self.lstSources[ i ] ):
+        geomLayer = QgsCore.QgsGeometry.fromWkt( self.foot.metadata['wkt_geom'] )
+        crs = QgsCore.QgsCoordinateReferenceSystem()
+        crs.createFromWkt( self.foot.metadata['wkt_sr'] )
+        self.ct.setSourceCrs( crs )
+        if not geomLayer.transform( self.ct ) == 0:
+          msgError = { '_error': True, 'message_error': "Can't transform geometry" }
+          setFeatureAttributes( feat, self.lstSources[ i ], msgError )
+          totalError += 1
+          geomLayer.Destroy()
+          del feat
+          continue
+        del self.foot.metadata['wkt_geom']
+        del self.foot.metadata['wkt_sr']
+        self.foot.metadata['crs']['description'] = crs.description()
+        self.foot.metadata['_error'] = False
+        setFeatureAttributes( feat, self.lstSources[ i ], self.foot.metadata )
+        feat.setGeometry( geomLayer )
+        del geomLayer
+      else:
+        msgError = { '_error': True, 'message_error': self.foot.msgError }
+        setFeatureAttributes( feat, self.lstSources[ i ], msgError )
+        totalError += 1
+      self.layerCatalog.addFeature( feat )
+      del feat
+      self.processedFootprint.emit()
+
+      if self.isKilled:
+        break
+
+    self.finished.emit( self.isKilled, totalError )
+
+  def kill(self):
+    self.isKilled = True
+    self.foot.kill()
+
 class CatalogFootprint():
   styleFile = "catalog_footprint.qml"
   expressionFile = "imagefootprint_exp.py"
@@ -429,7 +510,9 @@ class CatalogFootprint():
   
   def __init__(self, pluginName):
     self.pluginName = pluginName
-    self.layerPolygon = None
+    self.layerPolygon = self.totalImages = None
+    self.workers = []
+    self.totalError = self.totalFinishedWorker = self.totalProcessed = 0
     self.msgBar = self.iface.messageBar()
 
   def run(self, dataDlgFootprint):
@@ -499,32 +582,31 @@ class CatalogFootprint():
 
       return images
 
-    def setFeatureAttributes(feat, filename, metadata):
-      def getHtmlTreeMetadata(value, html):
-        if isinstance( value, dict ):
-          html += "<ul>"
-          for key, val in sorted( value.iteritems() ):
-            if not isinstance( val, dict ):
-              html += "<li>%s: %s</li> " % ( key, val )
-            else:
-              html += "<li>%s</li> " % key
-            html = getHtmlTreeMetadata( val, html )
-          html += "</ul>"
-          return html
-        return html
+    @QtCore.pyqtSlot(int, bool)
+    def finished( totalErros, isKilled):
+      self.totalError += totalErros
+      self.totalFinishedWorker += 1
+      if self.totalFinishedWorker == len( self.workers ):
+        if self.totalError > 0:
+          data = ( self.totalImages, self.layerPolygon.name(), self.totalError )
+          msg = "Add %d features in '%s'. Total of errors %d" % data
+          self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
+        else:
+          data = ( self.totalImages, self.layerPolygon.name() )
+          msg = "Add %d features in '%s'" % data
+          self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.INFO, 4 )
 
-      feat.setAttribute('filename', images[ i ] )
-      feat.setAttribute('name', os.path.basename( images[ i ] ) )
-      
-      html = getHtmlTreeMetadata(metadata, '')
-      feat.setAttribute('meta_html',html )
-      vjson = json.dumps( metadata )
-      feat.setAttribute('meta_json', vjson )
-      feat.setAttribute('meta_jsize', len( vjson) )
+        self.layerPolygon.commitChanges()
+        self.layerPolygon.updateExtents()
+
+    @QtCore.pyqtSlot()
+    def processedFootprint():
+      self.totalProcessed += 1
+      # Print progressbar
 
     images = getValidImages()
-    totalImages = len( images )
-    if totalImages == 0:
+    self.totalImages = len( images )
+    if self.totalImages == 0:
       msg = '' if dataDlgFootprint['hasSubDir'] else "not"
       msgSubdir = "%s searching in subdirectories" % msg
       data = ( dataDlgFootprint['dirImages'], msgSubdir )
@@ -536,51 +618,26 @@ class CatalogFootprint():
     self.layerPolygon.startEditing()
     crsLayer = QgsCore.QgsCoordinateReferenceSystem()
     crsLayer.createFromWkt( self.layerPolygon.crs().toWkt() )
-    ct = QgsCore.QgsCoordinateTransform()
-    ct.setDestCRS( crsLayer )
 
-    foot = Footprint( dataDlgFootprint['hasValidPixels'], dataDlgFootprint['wktCrsImages'] )
-    totalError = 0
-    for i in xrange( totalImages ):
-      feat = QgsCore.QgsFeature( self.layerPolygon.dataProvider().fields() )
-      if foot.calculate( images[ i ] ):
-        geomLayer = QgsCore.QgsGeometry.fromWkt( foot.metadata['wkt_geom'] )
-        crs = QgsCore.QgsCoordinateReferenceSystem()
-        crs.createFromWkt( foot.metadata['wkt_sr'] )
-        ct.setSourceCrs( crs )
-        if not geomLayer.transform( ct ) == 0:
-          msgError = { '_error': True, 'message_error': "Can't transform geometry" }
-          setFeatureAttributes( feat, images[ i ], msgError )
-          totalError += 1
-          geomLayer.Destroy()
-          del feat
-          continue
-        del foot.metadata['wkt_geom']
-        del foot.metadata['wkt_sr']
-        foot.metadata['crs']['description'] = crs.description()
-        foot.metadata['_error'] = False
-        setFeatureAttributes( feat, images[ i ], foot.metadata )
-        feat.setGeometry( geomLayer )
-        del geomLayer
-      else:
-        msgError = { '_error': True, 'message_error': foot.msgError }
-        setFeatureAttributes( feat, images[ i ], msgError )
-        totalError += 1
-      self.layerPolygon.addFeature( feat )
-      del feat
-
-    if totalError > 0:
-      data = ( totalImages, self.layerPolygon.name(), totalError )
-      msg = "Add %d features in '%s'. Total of errors %d" % data
-      self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
-    else:
-      data = ( totalImages, self.layerPolygon.name() )
-      msg = "Add %d features in '%s'" % data
-      self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.INFO, 4 )
-
-    self.layerPolygon.commitChanges()
-    self.layerPolygon.updateExtents()
-
+    data = {
+      'sources': images,
+      'feature': QgsCore.QgsFeature( self.layerPolygon.dataProvider().fields() ),
+      'crsLayer': crsLayer,
+      'hasValidPixels': dataDlgFootprint['hasValidPixels'] ,
+      'wktCrsImages': dataDlgFootprint['wktCrsImages']
+    }
+    
+    # Init workers: Calculate Number of processors
+    for i in xrange( 1 ):
+      self.workers.append( WorkerPopulateCatalog( self.layerPolygon ) )
+      self.workers[ i ].finished.connect( finished )
+    
+    # Run
+    for i in xrange( len( self.workers ) ):
+      self.workers[ i ].setData( data )
+      # self.threads[ i ].start()
+      self.workers[ i ].run() # DEBUG
+      
   @staticmethod  
   def copyExpression():
     f = os.path.dirname
