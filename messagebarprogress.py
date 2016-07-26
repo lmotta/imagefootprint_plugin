@@ -58,5 +58,6 @@ class MessageBarProgress(QtCore.QObject):
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
     self.funcKill()
-    self.tbCancel.clicked.disconnect( self.clickedCancel )
+    self.tbCancel.setEnabled( False )
+
 
