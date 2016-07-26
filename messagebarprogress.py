@@ -23,39 +23,40 @@ from qgis import ( gui as QgsGui, utils as QgsUtils )
 
 
 class MessageBarProgress(QtCore.QObject):
-  canceled = QtCore.pyqtSignal()
-  
-  def __init__(self, pluginName, title, maximum):
+  def __init__(self, pluginName, msg, funcKill):
     def initGui():
       def setCancel():
         self.tbCancel.setIcon( QtGui.QIcon(":/images/themes/default/mActionFileExit.png") )
         self.tbCancel.setText( "Cancel")
         self.tbCancel.setToolButtonStyle( QtCore.Qt.ToolButtonTextBesideIcon )
 
-      self.pb = QtGui.QProgressBar( msgBar )
+      self.msgBarItem = QgsUtils.iface.messageBar().createMessage( pluginName, msg )
+      self.pb = QtGui.QProgressBar( self.msgBarItem )
       self.pb.setAlignment( QtCore.Qt.AlignLeft )
-      self.tbCancel = QtGui.QToolButton( msgBar )
+      self.tbCancel = QtGui.QToolButton( self.msgBarItem )
       setCancel()
-      msg = "%s - %d images" % ( title, maximum  )
-      self.widget = msgBar.createMessage( pluginName, msg )
-      lyt = self.widget.layout()
+      
+      lyt = self.msgBarItem.layout()
       lyt.addWidget( self.tbCancel )
       lyt.addWidget( self.pb )
 
     super(MessageBarProgress, self).__init__()
-    self.widget = self.pb = self.tbCancel = None
-    msgBar = QgsUtils.iface.messageBar()
+    self.funcKill = funcKill
+    self.msgBarItem = self.pb = self.tbCancel = None
     initGui()
     self.tbCancel.clicked.connect( self.clickedCancel )
+    
+  def init(self, maximum):
     self.pb.setValue( 1 )
     self.pb.setMaximum( maximum )
-    msgBar.pushWidget( self.widget, QgsGui.QgsMessageBar.INFO )
-
-  def step(self, value):
+    self.msgBarItem.setText( "Total %d" % maximum )
+  
+  def step(self, step):
+    value = self.pb.value() + step 
     self.pb.setValue( value )
 
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
-    self.canceled.emit()
+    self.funcKill()
     self.tbCancel.clicked.disconnect( self.clickedCancel )
 
