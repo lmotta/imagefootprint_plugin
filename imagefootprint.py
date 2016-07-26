@@ -25,6 +25,8 @@ from qgis import ( core as QgsCore, gui as QgsGui, utils as QgsUtils )
 
 from osgeo import ( gdal, ogr, osr )
 from gdalconst import ( GA_ReadOnly, GA_Update )
+
+from messagebarprogress import MessageBarProgress
   
 class DialogFootprint(QtGui.QDialog):
   dirImages = None
@@ -422,17 +424,17 @@ class Footprint():
     self.isKilled = True
 
 class WorkerPopulateCatalog(QtCore.QObject):
-  
   finished = QtCore.pyqtSignal(int, bool)
-  processedFootprint = QtCore.pyqtSignal()
+  processed = QtCore.pyqtSignal()
 
-  def __init__(self, layerCatalog):
+  def __init__(self):
     super(WorkerPopulateCatalog, self).__init__()
-    self.layerCatalog = layerCatalog
     self.isKilled = False
-    self.foot = self.featTemplate = self.lstSources = self.ct = None
+    self.layerCatalog = self.foot = self.featTemplate = None
+    self.lstSources = self.ct = None
 
   def setData(self, data):
+    self.layerCatalog = data['layer']
     self.lstSources = data[ 'sources' ]
     self.featTemplate = data[ 'feature' ]
     self.ct = QgsCore.QgsCoordinateTransform()
@@ -491,7 +493,7 @@ class WorkerPopulateCatalog(QtCore.QObject):
         totalError += 1
       self.layerCatalog.addFeature( feat )
       del feat
-      self.processedFootprint.emit()
+      self.processed.emit()
 
       if self.isKilled:
         break
@@ -502,18 +504,97 @@ class WorkerPopulateCatalog(QtCore.QObject):
     self.isKilled = True
     self.foot.kill()
 
-class CatalogFootprint():
+class CatalogFootprint(QtCore.QObject):
   styleFile = "catalog_footprint.qml"
   expressionFile = "imagefootprint_exp.py"
   expressionDir = "expressions"
   iface = QgsUtils.iface
   
   def __init__(self, pluginName):
+    super(CatalogFootprint, self).__init__()
     self.pluginName = pluginName
     self.layerPolygon = self.totalImages = None
-    self.workers = []
+    self.workers = self.threads = self.mbp = None
     self.totalError = self.totalFinishedWorker = self.totalProcessed = 0
     self.msgBar = self.iface.messageBar()
+    self.nameModulus = "ImageFootprint"
+    self.initThreads()
+    
+  def __del__(self):
+    self.finishThreads()
+
+  def initThreads(self):
+    totalCPU = QtCore.QThread.idealThreadCount()
+    title = "Processing with %d CPU" % totalCPU
+    self.workers = []
+    self.threads = []
+    for i in xrange( totalCPU ):
+      worker = WorkerPopulateCatalog()
+      thread = QtCore.QThread( self )
+      thread.setObjectName( "%s - %d" % ( self.nameModulus, i+1 ) )
+      worker.moveToThread( thread )
+      self.threads.append( thread )
+      self.workers.append( worker )
+      self._connectWorkers( i )
+
+  def finishThreads(self):
+    for i in xrange( len( self.workers ) ):
+      self._connectWorkers( i, False )
+      self.workers[ i ].deleteLater()
+      self.threads[ i ].wait()
+      self.threads[ i ].deleteLater()
+      self.threads[ i ] = self.workers[ i ] = None
+
+  def _connectWorkers(self, i, isConnect = True):
+    ss = [
+      { 'signal': self.threads[ i ].started,   'slot': self.workers[ i ].run },
+      { 'signal': self.workers[ i ].finished,  'slot': self.finishedWorker },
+      { 'signal': self.workers[ i ].processed, 'slot': self.processedWorker }
+    ]
+    if isConnect:
+      for item in ss:
+        item['signal'].connect( item['slot'] )  
+    else:
+      for item in ss:
+        item['signal'].disconnect( item['slot'] )
+
+  @QtCore.pyqtSlot(int, bool)
+  def finishedWorker(self, totalErros, isKilled):
+    self.totalError += totalErros
+    self.totalFinishedWorker += 1
+    if self.totalFinishedWorker == len( self.workers ):
+      self.finishedCatalog(isKilled)
+
+  @QtCore.pyqtSlot()
+  def processedWorker(self):
+    self.totalProcessed += 1
+    self.mbp.step( self.totalProcessed )
+
+  def finishedCatalog(self, isKilled):
+    self.totalError = self.totalFinishedWorker = self.totalProcessed = 0
+    statusFinished = { 'isOk': True, 'msg': None }
+    if isKilled:
+      statusFinished['isOk'] = False
+      if not self.layerPolygon is None:
+        name = self.layerPolygon.name()
+        self.layerPolygon.commitChanges()
+        QgsCore.QgsMapLayerRegistry.instance().removeMapLayer( self.layerPolygon.id() )
+        statusFinished['msg'] = "Canceled by remove layer '%s'" % name
+      else:
+        statusFinished['msg'] = "Canceled by user"
+    else:
+      if self.totalError > 0:
+        data = ( self.totalImages, self.layerPolygon.name(), self.totalError )
+        statusFinished['msg'] = "Add %d features in '%s'. Total of errors %d" % data
+      else:
+        data = ( self.totalImages, self.layerPolygon.name() )
+        statusFinished['msg'] = "Add %d features in '%s'" % data
+      self.layerPolygon.commitChanges()
+      self.layerPolygon.updateExtents()
+
+    self.msgBar.popWidget()
+    typMessage = QgsGui.QgsMessageBar.INFO if statusFinished['isOk'] else QgsGui.QgsMessageBar.WARNING
+    self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], typMessage, 4 )
 
   def run(self, dataDlgFootprint):
     def createLayerPolygon():
@@ -582,28 +663,17 @@ class CatalogFootprint():
 
       return images
 
-    @QtCore.pyqtSlot(int, bool)
-    def finished( totalErros, isKilled):
-      self.totalError += totalErros
-      self.totalFinishedWorker += 1
-      if self.totalFinishedWorker == len( self.workers ):
-        if self.totalError > 0:
-          data = ( self.totalImages, self.layerPolygon.name(), self.totalError )
-          msg = "Add %d features in '%s'. Total of errors %d" % data
-          self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
-        else:
-          data = ( self.totalImages, self.layerPolygon.name() )
-          msg = "Add %d features in '%s'" % data
-          self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.INFO, 4 )
+    def generatorSplitImagesWorkers():
+      a = images
+      n = len( self.workers )
+      # Resolution by http://stackoverflow.com/users/220672/tixxit
+      # Python: A: splitting a list of arbitrary size into only roughly N-equal parts
+      k, m = len(a) / n, len(a) % n
+      return (a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in xrange(n))
 
-        self.layerPolygon.commitChanges()
-        self.layerPolygon.updateExtents()
-
-    @QtCore.pyqtSlot()
-    def processedFootprint():
-      self.totalProcessed += 1
-      # Print progressbar
-
+    self.msgBar.clearWidgets()
+    msg = "Searching images..."
+    self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )    
     images = getValidImages()
     self.totalImages = len( images )
     if self.totalImages == 0:
@@ -620,23 +690,26 @@ class CatalogFootprint():
     crsLayer.createFromWkt( self.layerPolygon.crs().toWkt() )
 
     data = {
-      'sources': images,
+      'layer': self.layerPolygon,
       'feature': QgsCore.QgsFeature( self.layerPolygon.dataProvider().fields() ),
       'crsLayer': crsLayer,
       'hasValidPixels': dataDlgFootprint['hasValidPixels'] ,
       'wktCrsImages': dataDlgFootprint['wktCrsImages']
     }
     
-    # Init workers: Calculate Number of processors
-    for i in xrange( 1 ):
-      self.workers.append( WorkerPopulateCatalog( self.layerPolygon ) )
-      self.workers[ i ].finished.connect( finished )
+    # MessageBarProgress destroy in 'finishedCatalog' by self.msgBar.popWidget
+    self.msgBar.popWidget()
+    title = "Processing with %d CPU" % len( self.workers ) 
+    self.mbp = MessageBarProgress( self.pluginName, title, len( images ) )
     
-    # Run
+    gen = generatorSplitImagesWorkers()
     for i in xrange( len( self.workers ) ):
+      data['sources'] = gen.next()
       self.workers[ i ].setData( data )
-      # self.threads[ i ].start()
-      self.workers[ i ].run() # DEBUG
+      self.mbp.canceled.connect( self.workers[ i ].kill )
+      self.threads[ i ].start()
+      #self.workers[ i ].run() # DEBUG
+    gen.close()
       
   @staticmethod  
   def copyExpression():
