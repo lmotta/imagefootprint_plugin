@@ -25,8 +25,14 @@ from qgis import ( core as QgsCore, gui as QgsGui, utils as QgsUtils )
 
 from osgeo import ( gdal, ogr, osr )
 from gdalconst import ( GA_ReadOnly, GA_Update )
+from wx.lib.agw.pyprogress import Finished
+gdal.AllRegister()
+gdal.UseExceptions()
+gdal.PushErrorHandler('CPLQuietErrorHandler')
+
 
 from messagebarprogress import MessageBarProgress
+from messagebarcancel import MessageBarCancel
   
 class DialogFootprint(QtGui.QDialog):
   dirImages = None
@@ -148,6 +154,142 @@ class DialogFootprint(QtGui.QDialog):
       self.hasInverse = self.cbInverse.isChecked()
     else:
       self.msgBar.pushMessage( self.pluginName, self.titleSelectDirectory, QgsGui.QgsMessageBar.WARNING, 4 )
+
+class WorkerPopulateValidImages(QtCore.QObject):
+  finished = QtCore.pyqtSignal()
+  isKilled = False
+
+  def __init__(self):
+    super(WorkerPopulateValidImages, self).__init__()
+    self.images = None
+
+  def setData(self, images, dataDlgFootprint):
+    self.images = images
+    self.dirImages = dataDlgFootprint['dirImages']
+    self.hasSubDir = dataDlgFootprint[ 'hasSubDir' ]
+    self.filters = dataDlgFootprint[ 'filters' ]
+    self.hasInverse = dataDlgFootprint[ 'hasInverse' ]
+
+  @QtCore.pyqtSlot()
+  def run(self):
+    def getValids(root, files):
+      def addImage(root, file):
+        def validDataSet(filename):
+          ds = None
+          try:
+            ds = gdal.Open( filename, GA_ReadOnly )            
+          except RuntimeError:
+            pass
+          not_valid = ds is None or len( ds.GetProjectionRef() ) == 0 or ds.RasterCount == 0
+          return None if not_valid else ds
+
+        filename = os.path.join( root, file )
+        ds = validDataSet( filename )
+        if ds is None:
+          return
+        ds = None
+        images.append( filename )
+        
+      filters = None
+      hasFilters = len( self.filters ) > 0
+      if hasFilters:
+        filters = self.filters.upper().split(',')
+      images = []
+      if hasFilters:
+        if self.hasInverse:
+          for i in xrange( len( files ) ):
+            file = files[ i ]
+            if not any( w in file.upper() for w in filters ):
+              addImage( root, file )
+        else:
+          for i in xrange( len( files ) ):
+            file = files[ i ]
+            if any( w in file.upper() for w in filters ):
+              addImage( root, file )
+      else:
+        for i in xrange( len( files ) ):
+          addImage( root, files[ i ] )
+
+      return images
+    
+    if self.hasSubDir:
+      for root, dirs, files in os.walk( self.dirImages ):
+        if self.isKilled:
+          break
+        self.images.extend( getValids( root, files ) )
+    else:
+      for root, dirs, files in os.walk( self.dirImages ):
+        if self.isKilled:
+          break
+        self.images.extend( getValids( root, files ) )
+        break
+
+    self.finished.emit()
+
+class GetValidImages(QtCore.QObject):
+  
+  finished = QtCore.pyqtSignal()
+  
+  def __init__(self, pluginName):
+    super(GetValidImages, self).__init__()
+    self.pluginName = pluginName
+    self.images = []
+    self.worker = self.thread = self.mbp = None
+    self.msgBar = QgsUtils.iface.messageBar()
+    self.nameModulus = "ImageFootprint"
+    self.initThread()
+    
+  def __del__(self):
+    self.finishThread()
+    del self.images[:]
+
+  def initThread(self):
+    self.worker = WorkerPopulateValidImages()
+    self.thread = QtCore.QThread( self )
+    self.thread.setObjectName( self.nameModulus )
+    self.worker.moveToThread( self.thread )
+    self._connectWorker()
+
+  def finishThread(self):
+    self._connectWorker( False )
+    self.worker.deleteLater()
+    self.thread.wait()
+    self.thread.deleteLater()
+    self.thread = self.worker = None
+
+  def _connectWorker(self, isConnect = True):
+    ss = [
+      { 'signal': self.thread.started,   'slot': self.worker.run },
+      { 'signal': self.worker.finished,  'slot': self.finishedWorker }
+    ]
+    if isConnect:
+      for item in ss:
+        item['signal'].connect( item['slot'] )  
+    else:
+      for item in ss:
+        item['signal'].disconnect( item['slot'] )
+
+  @QtCore.pyqtSlot(bool, int, int)
+  def finishedWorker(self):
+    self.thread.quit()
+    self.msgBar.popWidget()
+    self.finished.emit()
+
+  def run(self, dataDlgFootprint):
+    def kill():
+      WorkerPopulateValidImages.isKilled = True
+
+    WorkerPopulateValidImages.isKilled = False
+    self.msgBar.clearWidgets()
+    msg = " and its subdirectories" if dataDlgFootprint['hasSubDir'] else ""
+    data = ( dataDlgFootprint['dirImages'], msg )
+    msg = "Searching images in '%s'%s..." % data
+    self.mbc = MessageBarCancel( self.pluginName, msg, kill )
+    self.msgBar.pushWidget( self.mbc.msgBarItem, QgsGui.QgsMessageBar.INFO )
+    
+    self.worker.setData( self.images, dataDlgFootprint )
+    self.thread.start()
+    #self.worker.run() # DEBUG
 
 class Footprint():
   gdal_sctruct_types = {
@@ -522,10 +664,6 @@ class CatalogFootprint(QtCore.QObject):
     self.msgBar = self.iface.messageBar()
     self.nameModulus = "ImageFootprint"
     self.initThread()
-    
-    gdal.AllRegister()
-    gdal.UseExceptions()
-    gdal.PushErrorHandler('CPLQuietErrorHandler')
 
   def __del__(self):
     self.finishThread()
@@ -556,12 +694,6 @@ class CatalogFootprint(QtCore.QObject):
     else:
       for item in ss:
         item['signal'].disconnect( item['slot'] )
-
-  @QtCore.pyqtSlot(str)
-  def layerWillBeRemoved(self, theLayerId):
-    if not self.idLayerCatalog is None and self.idLayerCatalog == theLayerId:
-      WorkerPopulateCatalog.isKilled = True
-      Footprint.isKilled = True
 
   @QtCore.pyqtSlot(bool, int, int)
   def finishedWorker(self, totalAdded, totalError):
@@ -595,124 +727,89 @@ class CatalogFootprint(QtCore.QObject):
       statusFinished['msg'] = "Add %d features in '%s'" % data
     finished()
 
+  @QtCore.pyqtSlot(str)
+  def layerWillBeRemoved(self, theLayerId):
+    if not self.idLayerCatalog is None and self.idLayerCatalog == theLayerId:
+      WorkerPopulateCatalog.isKilled = True
+      Footprint.isKilled = True
+
   @QtCore.pyqtSlot()
   def processedWorker(self):
     self.mbp.step( 1 )
 
   def run(self, dataDlgFootprint):
-    def createLayerPolygon():
-      atts = [
-        "name:string(100)", "filename:string(500)",
-        "meta_html:string(1000)", "meta_json:string(500)",
-        "meta_jsize:integer"
-      ]
-      l_fields = map( lambda item: "field=%s" % item, atts  )
-      l_fields.insert( 0, "crs=epsg:4326" )
-      l_fields.append( "index=yes" )
-      s_fields = '&'.join( l_fields )
-      nameLayer = "catalog_footprint_%s" % str( datetime.datetime.now() )
-      self.layerCatalog =  QgsCore.QgsVectorLayer( "MultiPolygon?%s" % s_fields, nameLayer, "memory")
-      QgsCore.QgsMapLayerRegistry.instance().addMapLayer( self.layerCatalog )
-      self.layerCatalog.loadNamedStyle( os.path.join( os.path.dirname( __file__ ), self.styleFile ) )
-      self.iface.legendInterface().refreshLayerSymbology( self.layerCatalog )
-      
-      return self.layerCatalog
+    def populateCatalog(images): 
+      def createLayerPolygon():
+        atts = [
+          "name:string(100)", "filename:string(500)",
+          "meta_html:string(1000)", "meta_json:string(500)",
+          "meta_jsize:integer"
+        ]
+        l_fields = map( lambda item: "field=%s" % item, atts  )
+        l_fields.insert( 0, "crs=epsg:4326" )
+        l_fields.append( "index=yes" )
+        s_fields = '&'.join( l_fields )
+        nameLayer = "catalog_footprint_%s" % str( datetime.datetime.now() )
+        self.layerCatalog =  QgsCore.QgsVectorLayer( "MultiPolygon?%s" % s_fields, nameLayer, "memory")
+        QgsCore.QgsMapLayerRegistry.instance().addMapLayer( self.layerCatalog )
+        self.layerCatalog.loadNamedStyle( os.path.join( os.path.dirname( __file__ ), self.styleFile ) )
+        self.iface.legendInterface().refreshLayerSymbology( self.layerCatalog )
+        
+        return self.layerCatalog
     
-    def getValidImages():
-      def getValids(root, files):
-        def addImage(root, file):
-          def validDataSet(filename):
-            ds = None
-            try:
-              ds = gdal.Open( filename, GA_ReadOnly )            
-            except RuntimeError:
-              pass
-            not_valid = ds is None or len( ds.GetProjectionRef() ) == 0 or ds.RasterCount == 0
-            return None if not_valid else ds
+      def kill():
+        Footprint.isKilled = True
+        WorkerPopulateCatalog.isKilled = True
 
-          filename = os.path.join( root, file )
-          ds = validDataSet( filename )
-          if ds is None:
-            return
-          ds = None
-          images.append( filename )
-          
-        filters = None
-        hasFilters = len( dataDlgFootprint['filters'] ) > 0
-        if hasFilters:
-          filters = dataDlgFootprint['filters'].upper().split(',')
-        images = []
-        if hasFilters:
-          if dataDlgFootprint['hasInverse']:
-            for i in xrange( len( files ) ):
-              file = files[ i ]
-              if not any( w in file.upper() for w in filters ):
-                addImage( root, file )
-          else:
-            for i in xrange( len( files ) ):
-              file = files[ i ]
-              if any( w in file.upper() for w in filters ):
-                addImage( root, file )
-        else:
-          for i in xrange( len( files ) ):
-            addImage( root, files[ i ] )
-
-        return images
+      self.msgBar.clearWidgets()
+      self.mbp = MessageBarProgress( self.pluginName, "", kill )
+      self.msgBar.pushWidget( self.mbp.msgBarItem, QgsGui.QgsMessageBar.INFO )
       
-      images = []
-      if dataDlgFootprint['hasSubDir']:
-        for root, dirs, files in os.walk( dataDlgFootprint['dirImages'] ):
-          images.extend( getValids( root, files ) )
+      self.layerCatalog = createLayerPolygon()
+      self.idLayerCatalog = self.layerCatalog.id()
+      QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.connect( self.layerWillBeRemoved )
+      crsLayer = QgsCore.QgsCoordinateReferenceSystem()
+      crsLayer.createFromWkt( self.layerCatalog.crs().toWkt() )
+  
+      data = {
+        'sources': images,
+        'layer': self.layerCatalog,
+        'feature': QgsCore.QgsFeature( self.layerCatalog.dataProvider().fields() ),
+        'crsLayer': crsLayer,
+        'hasValidPixels': dataDlgFootprint['hasValidPixels'] ,
+        'wktCrsImages': dataDlgFootprint['wktCrsImages']
+      }
+      
+      self.mbp.init( len( images ) )
+      self.worker.setData( data )
+      WorkerPopulateCatalog.isKilled = False
+      Footprint.isKilled = False
+      self.thread.start()
+      #self.worker.run() # DEBUG
+    
+    @QtCore.pyqtSlot()
+    def finishedValidImages():
+      if WorkerPopulateValidImages.isKilled:
+        self.msgBar.popWidget()
+        msg = "Canceled by user" 
+        self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], QgsGui.QgsMessageBar.WARNING, 4 )
+        self.finished.emit()
+        return
+      if len( gvi.images ) == 0:
+        msg = '' if dataDlgFootprint['hasSubDir'] else "NOT"
+        msgSubdir = "%s searching in subdirectories" % msg
+        data = ( dataDlgFootprint['dirImages'], msgSubdir )
+        msg = "Not found images in '%s' %s!" % data
+        self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
+        self.finished.emit()
       else:
-        for root, dirs, files in os.walk( dataDlgFootprint['dirImages'] ):
-          images.extend( getValids( root, files ) )
-          break
-
-      return images
-
-    def kill():
-      Footprint.isKilled = True
-      WorkerPopulateCatalog.isKilled = True
-
-    WorkerPopulateCatalog.isKilled = False
-    Footprint.isKilled = False
+        populateCatalog( gvi.images )
     
-    self.msgBar.clearWidgets()
-    self.mbp = MessageBarProgress( self.pluginName, "Searching images...", kill )
-    self.msgBar.pushWidget( self.mbp.msgBarItem, QgsGui.QgsMessageBar.INFO )
+    gvi = GetValidImages( self.pluginName )
+    gvi.finished.connect( finishedValidImages )
+    WorkerPopulateValidImages.isKilled = False
+    gvi.run( dataDlgFootprint )
     
-    images = getValidImages()
-    totalImages = len( images )
-    if totalImages == 0:
-      self.msgBar.popWidget()
-      msg = '' if dataDlgFootprint['hasSubDir'] else "NOT"
-      msgSubdir = "%s searching in subdirectories" % msg
-      data = ( dataDlgFootprint['dirImages'], msgSubdir )
-      msg = "Not found images in '%s' %s!" % data
-      self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
-      self.finished.emit()
-      return
-
-    self.layerCatalog = createLayerPolygon()
-    self.idLayerCatalog = self.layerCatalog.id()
-    QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.connect( self.layerWillBeRemoved )
-    crsLayer = QgsCore.QgsCoordinateReferenceSystem()
-    crsLayer.createFromWkt( self.layerCatalog.crs().toWkt() )
-
-    data = {
-      'sources': images,
-      'layer': self.layerCatalog,
-      'feature': QgsCore.QgsFeature( self.layerCatalog.dataProvider().fields() ),
-      'crsLayer': crsLayer,
-      'hasValidPixels': dataDlgFootprint['hasValidPixels'] ,
-      'wktCrsImages': dataDlgFootprint['wktCrsImages']
-    }
-    
-    self.mbp.init( totalImages )
-    self.worker.setData( data )
-    self.thread.start()
-    #self.worker.run() # DEBUG
-      
   @staticmethod  
   def copyExpression():
     f = os.path.dirname
