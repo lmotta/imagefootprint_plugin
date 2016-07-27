@@ -17,6 +17,7 @@ email                : motta.luiz@gmail.com
  *                                                                         *
  ***************************************************************************/
 """
+import os
 from qgis import core as QgsCore
 from imagefootprint_plugin import CatalogFootprint
 
@@ -48,3 +49,9 @@ def getValueFromMetadataFootprint(values, feature, parent):
     raise Exception( valueKey )
 
   return valueKey
+
+@QgsCore.qgsfunction(args=1, group='Image Footprint')
+def getDirName(values, feature, parent):
+  return os.path.dirname( values[0] )
+
+    
