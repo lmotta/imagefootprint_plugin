@@ -792,7 +792,7 @@ class CatalogFootprint(QtCore.QObject):
       if WorkerPopulateValidImages.isKilled:
         self.msgBar.popWidget()
         msg = "Canceled by user" 
-        self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], QgsGui.QgsMessageBar.WARNING, 4 )
+        self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
         self.finished.emit()
         return
       if len( gvi.images ) == 0:
