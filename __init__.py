@@ -37,7 +37,6 @@ class ImageFootprintPlugin:
     self.dlgFootprint = None
 
   def initGui(self):
-
     name = self.namePlugin.replace('&', '')
     about = "Create a catalog layer from directories of images"
     icon = QtGui.QIcon( os.path.join( os.path.dirname(__file__), 'imagefootprint.svg' ) )
@@ -45,16 +44,20 @@ class ImageFootprintPlugin:
     self.action.setObjectName( name.replace(' ', '') )
     self.action.setWhatsThis( about )
     self.action.setStatusTip( about )
-    #self.action.setCheckable( True )
     self.action.triggered.connect( self.run )
+    self.catalog.finished.connect( self.enableAction )
 
     self.iface.addToolBarIcon( self.action )
-    self.iface.addPluginToMenu( self.namePlugin, self.action)
+    self.iface.addPluginToMenu( self.namePlugin, self.action )
 
   def unload(self):
     self.iface.removeToolBarIcon( self.action )
     self.iface.removePluginMenu( self.namePlugin, self.action)
     del self.action
+
+  @QtCore.pyqtSlot()
+  def enableAction(self):
+    self.action.setEnabled(True)
 
   @QtCore.pyqtSlot()
   def run(self):
@@ -77,4 +80,5 @@ class ImageFootprintPlugin:
         'hasValidPixels': self.dlgFootprint.hasValidPixels,
         'hasSubDir': self.dlgFootprint.hasSubDir
       }
+      self.action.setEnabled(False)
       self.catalog.run( data )

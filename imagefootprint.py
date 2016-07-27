@@ -159,12 +159,12 @@ class Footprint():
     gdal.GDT_Float32: 'f',
     gdal.GDT_Float64: 'd'
   }
+  isKilled = False
 
   def __init__(self, hasValidPixels, wktSRS=None):
     self.hasValidPixels = hasValidPixels
     self.metadata = {}
     self.srsTransform = self.crsDescripTransform = self.msgError = None
-    self.isKilled = False
     if not wktSRS is None:
       self.srsTransform = osr.SpatialReference()
       self.srsTransform.ImportFromWkt( wktSRS )
@@ -327,7 +327,6 @@ class Footprint():
 
       return True
     
-    
     if self.isKilled:
       return False
 
@@ -420,16 +419,13 @@ class Footprint():
     
     return True
 
-  def kill(self):
-    self.isKilled = True
-
 class WorkerPopulateCatalog(QtCore.QObject):
-  finished = QtCore.pyqtSignal(bool, int, int)
+  finished = QtCore.pyqtSignal(int, int)
   processed = QtCore.pyqtSignal()
+  isKilled = False
 
   def __init__(self):
     super(WorkerPopulateCatalog, self).__init__()
-    self.isKilled = None
     self.layerCatalog = self.foot = self.featTemplate = None
     self.lstSources = self.ct = None
 
@@ -440,7 +436,6 @@ class WorkerPopulateCatalog(QtCore.QObject):
     self.ct = QgsCore.QgsCoordinateTransform()
     self.ct.setDestCRS( data['crsLayer'] )
     self.foot = Footprint( data['hasValidPixels'], data['wktCrsImages'] )
-    self.isKilled = False
 
   @QtCore.pyqtSlot()
   def run(self):
@@ -509,17 +504,15 @@ class WorkerPopulateCatalog(QtCore.QObject):
       else:
         QgsUtils.iface.mapCanvas().refresh()
       
-    self.finished.emit( self.isKilled, totalAdded, totalError )
-
-  def kill(self):
-    self.isKilled = True
-    self.foot.kill()
+    self.finished.emit( totalAdded, totalError )
 
 class CatalogFootprint(QtCore.QObject):
   styleFile = "catalog_footprint.qml"
   expressionFile = "imagefootprint_exp.py"
   expressionDir = "expressions"
   iface = QgsUtils.iface
+  
+  finished = QtCore.pyqtSignal()
   
   def __init__(self, pluginName):
     super(CatalogFootprint, self).__init__()
@@ -529,9 +522,12 @@ class CatalogFootprint(QtCore.QObject):
     self.msgBar = self.iface.messageBar()
     self.nameModulus = "ImageFootprint"
     self.initThread()
-    self.layerRemoved = None
     QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.connect( self.layerWillBeRemoved )
     
+    gdal.AllRegister()
+    gdal.UseExceptions()
+    gdal.PushErrorHandler('CPLQuietErrorHandler')
+
   def __del__(self):
     self.finishThread()
     QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.disconnect( self.layerWillBeRemoved )
@@ -564,36 +560,41 @@ class CatalogFootprint(QtCore.QObject):
         item['signal'].disconnect( item['slot'] )
 
   @QtCore.pyqtSlot(str)
-  def layerWillBeRemoved(self, theLayerId): 
-    if not self.layerCatalog is None and self.layerCatalog.id == theLayerId:
-      if not self.worker is None:
-        self.layerRemoved = True
-        self.worker.kill()
+  def layerWillBeRemoved(self, theLayerId):
+    if not self.layerCatalog is None and self.layerCatalog.id() == theLayerId:
+      WorkerPopulateCatalog.isKilled = True
+      Footprint.isKilled = True
 
   @QtCore.pyqtSlot(bool, int, int)
-  def finishedWorker(self, isKilled, totalAdded, totalError):
+  def finishedWorker(self, totalAdded, totalError):
+    def finished(): 
+      self.thread.quit()
+      self.msgBar.popWidget()
+      self.mbp = None
+      typMessage = QgsGui.QgsMessageBar.INFO if statusFinished['isOk'] else QgsGui.QgsMessageBar.WARNING
+      self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], typMessage, 4 )
+      self.finished.emit()
+    
     statusFinished = { 'isOk': True, 'msg': None }
-    if isKilled:
-      statusFinished['isOk'] = False
-      if self.layerRemoved:
-        statusFinished['msg'] = "Canceled by remove layer '%s'" % name
-      else:
-        name = self.layerCatalog.name()
-        QgsCore.QgsMapLayerRegistry.instance().removeMapLayer( self.layerCatalog.id() )
-        statusFinished['msg'] = "Canceled by user"
-    else:
-      if totalError > 0:
-        data = ( totalAdded, self.layerCatalog.name(), totalError )
-        statusFinished['msg'] = "Add %d features in '%s'. Total of errors %d" % data
-      else:
-        data = ( totalAdded, self.layerCatalog.name() )
-        statusFinished['msg'] = "Add %d features in '%s'" % data
+    # Have delay for remove layer!
+    if not self.layerCatalog in QgsUtils.iface.legendInterface().layers():
+      statusFinished['msg'] = "Canceled by remove catalog layer"
+      finished()
+      return
+    
+    if WorkerPopulateCatalog.isKilled: 
+      QgsCore.QgsMapLayerRegistry.instance().removeMapLayer( self.layerCatalog.id() )
+      statusFinished['msg'] = "Canceled by user"
+      finished()
+      return
 
-    self.thread.quit()
-    self.msgBar.popWidget()
-    self.mbp = None
-    typMessage = QgsGui.QgsMessageBar.INFO if statusFinished['isOk'] else QgsGui.QgsMessageBar.WARNING
-    self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], typMessage, 4 )
+    if totalError > 0:
+      data = ( totalAdded, self.layerCatalog.name(), totalError )
+      statusFinished['msg'] = "Add %d features in '%s'. Total of errors %d" % data
+    else:
+      data = ( totalAdded, self.layerCatalog.name() )
+      statusFinished['msg'] = "Add %d features in '%s'" % data
+    finished()
 
   @QtCore.pyqtSlot()
   def processedWorker(self):
@@ -622,7 +623,11 @@ class CatalogFootprint(QtCore.QObject):
       def getValids(root, files):
         def addImage(root, file):
           def validDataSet(filename):
-            ds = gdal.Open( filename, GA_ReadOnly )
+            ds = None
+            try:
+              ds = gdal.Open( filename, GA_ReadOnly )            
+            except RuntimeError:
+              pass
             not_valid = ds is None or len( ds.GetProjectionRef() ) == 0 or ds.RasterCount == 0
             return None if not_valid else ds
 
@@ -666,8 +671,15 @@ class CatalogFootprint(QtCore.QObject):
 
       return images
 
+    def kill():
+      Footprint.isKilled = True
+      WorkerPopulateCatalog.isKilled = True
+
+    WorkerPopulateCatalog.isKilled = False
+    Footprint.isKilled = False
+
     self.msgBar.clearWidgets()
-    self.mbp = MessageBarProgress( self.pluginName, "Searching images...", self.worker.kill )    
+    self.mbp = MessageBarProgress( self.pluginName, "Searching images...", kill )    
     self.msgBar.pushWidget( self.mbp.msgBarItem, QgsGui.QgsMessageBar.INFO )
     images = getValidImages()
     totalImages = len( images )
@@ -694,7 +706,6 @@ class CatalogFootprint(QtCore.QObject):
     }
     
     self.mbp.init( totalImages )
-    self.layerRemoved = False
     self.worker.setData( data )
     self.thread.start()
     #self.worker.run() # DEBUG
