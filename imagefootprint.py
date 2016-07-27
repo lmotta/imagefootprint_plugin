@@ -517,12 +517,11 @@ class CatalogFootprint(QtCore.QObject):
   def __init__(self, pluginName):
     super(CatalogFootprint, self).__init__()
     self.pluginName = pluginName
-    self.layerCatalog = self.totalImages = None
+    self.layerCatalog = self.totalImages = self.idLayerCatalog = None
     self.worker = self.thread = self.mbp = None
     self.msgBar = self.iface.messageBar()
     self.nameModulus = "ImageFootprint"
     self.initThread()
-    QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.connect( self.layerWillBeRemoved )
     
     gdal.AllRegister()
     gdal.UseExceptions()
@@ -530,7 +529,6 @@ class CatalogFootprint(QtCore.QObject):
 
   def __del__(self):
     self.finishThread()
-    QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.disconnect( self.layerWillBeRemoved )
 
   def initThread(self):
     self.worker = WorkerPopulateCatalog()
@@ -561,7 +559,7 @@ class CatalogFootprint(QtCore.QObject):
 
   @QtCore.pyqtSlot(str)
   def layerWillBeRemoved(self, theLayerId):
-    if not self.layerCatalog is None and self.layerCatalog.id() == theLayerId:
+    if not self.idLayerCatalog is None and self.idLayerCatalog == theLayerId:
       WorkerPopulateCatalog.isKilled = True
       Footprint.isKilled = True
 
@@ -573,6 +571,7 @@ class CatalogFootprint(QtCore.QObject):
       self.mbp = None
       typMessage = QgsGui.QgsMessageBar.INFO if statusFinished['isOk'] else QgsGui.QgsMessageBar.WARNING
       self.msgBar.pushMessage( self.pluginName, statusFinished['msg'], typMessage, 4 )
+      QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.disconnect( self.layerWillBeRemoved )
       self.finished.emit()
     
     statusFinished = { 'isOk': True, 'msg': None }
@@ -677,22 +676,26 @@ class CatalogFootprint(QtCore.QObject):
 
     WorkerPopulateCatalog.isKilled = False
     Footprint.isKilled = False
-
+    
     self.msgBar.clearWidgets()
-    self.mbp = MessageBarProgress( self.pluginName, "Searching images...", kill )    
+    self.mbp = MessageBarProgress( self.pluginName, "Searching images...", kill )
     self.msgBar.pushWidget( self.mbp.msgBarItem, QgsGui.QgsMessageBar.INFO )
+    
     images = getValidImages()
     totalImages = len( images )
     if totalImages == 0:
       self.msgBar.popWidget()
-      msg = '' if dataDlgFootprint['hasSubDir'] else "not"
+      msg = '' if dataDlgFootprint['hasSubDir'] else "NOT"
       msgSubdir = "%s searching in subdirectories" % msg
       data = ( dataDlgFootprint['dirImages'], msgSubdir )
       msg = "Not found images in '%s' %s!" % data
       self.msgBar.pushMessage( self.pluginName, msg, QgsGui.QgsMessageBar.WARNING, 4 )
+      self.finished.emit()
       return
 
     self.layerCatalog = createLayerPolygon()
+    self.idLayerCatalog = self.layerCatalog.id()
+    QgsCore.QgsMapLayerRegistry.instance().layerWillBeRemoved.connect( self.layerWillBeRemoved )
     crsLayer = QgsCore.QgsCoordinateReferenceSystem()
     crsLayer.createFromWkt( self.layerCatalog.crs().toWkt() )
 

@@ -47,7 +47,7 @@ class MessageBarProgress(QtCore.QObject):
     self.tbCancel.clicked.connect( self.clickedCancel )
     
   def init(self, maximum):
-    self.pb.setValue( 1 )
+    self.pb.setValue( 0 )
     self.pb.setMaximum( maximum )
     self.msgBarItem.setText( "Total %d" % maximum )
   
