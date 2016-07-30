@@ -34,6 +34,7 @@ class ImageFootprintPlugin:
     self.action = None
     CatalogFootprint.copyExpression()
     self.catalog = CatalogFootprint( self.namePlugin.replace('&', '') )
+    self.catalog.finished.connect( self.enableAction )
     self.dlgFootprint = None
 
   def initGui(self):
@@ -45,7 +46,6 @@ class ImageFootprintPlugin:
     self.action.setWhatsThis( about )
     self.action.setStatusTip( about )
     self.action.triggered.connect( self.run )
-    self.catalog.finished.connect( self.enableAction )
 
     self.iface.addToolBarIcon( self.action )
     self.iface.addPluginToMenu( self.namePlugin, self.action )
