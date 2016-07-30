@@ -20,18 +20,17 @@ email                : motta.luiz@gmail.com
 """
 import os
 
-from PyQt4 import ( QtCore, QtGui )
-from qgis import ( gui as QgsGui, utils as QgsUtils )
+from PyQt4 import QtCore
+from qgis import gui as QgsGui
+
+from processtemplate import WorkerTemplate, MessageBarTemplate, ProcessTemplate
 
 from osgeo import gdal
 from gdalconst import GA_ReadOnly
 gdal.UseExceptions()
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
-class WorkerValidImages(QtCore.QObject):
-  finished = QtCore.pyqtSignal()
-  isKilled = False
-
+class WorkerValidImages(WorkerTemplate):
   def __init__(self):
     super(WorkerValidImages, self).__init__()
     self.images = None
@@ -97,75 +96,37 @@ class WorkerValidImages(QtCore.QObject):
         self.images.extend( getValids( root, files ) )
         break
 
-    self.finished.emit()
+    self.finished.emit({})
 
-class MessageBarCancel(QtCore.QObject):
+class MessageBarCancel(MessageBarTemplate):
   def __init__(self, pluginName, msg ):
-    def initGui():
-      def setCancel():
-        self.tbCancel.setIcon( QtGui.QIcon(":/images/themes/default/mActionFileExit.png") )
-        self.tbCancel.setText( "Cancel")
-        self.tbCancel.setToolButtonStyle( QtCore.Qt.ToolButtonTextBesideIcon )
-
-      self.msgBarItem = QgsUtils.iface.messageBar().createMessage( pluginName, msg )
-      self.tbCancel = QtGui.QToolButton( self.msgBarItem )
-      setCancel()
-      lyt = self.msgBarItem.layout()
-      lyt.addWidget( self.tbCancel )
-
-    super(MessageBarCancel, self).__init__()
-    self.msgBarItem = self.tbCancel = None
-    initGui()
-    self.tbCancel.clicked.connect( self.clickedCancel )
+    super(MessageBarCancel, self).__init__( pluginName, msg )
     
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
+    super(MessageBarCancel, self).clickedCancel( checked )
     WorkerValidImages.isKilled = True
-    self.tbCancel.setEnabled( False )
 
-class ValidImages(QtCore.QObject):
-  finished = QtCore.pyqtSignal()
-  
+class ValidImages(ProcessTemplate):
   def __init__(self, pluginName, nameModulus):
-    super(ValidImages, self).__init__()
-    self.pluginName, self.nameModulus = pluginName, nameModulus
-    self.worker = self.thread = self.mbp = None
-    self.msgBar = QgsUtils.iface.messageBar()
-    self.initThread()
+    super(ValidImages, self).__init__( pluginName, nameModulus )
     
   def __del__(self):
-    self.finishThread()
+    super(ValidImages, self).__del__()
 
   def initThread(self):
     self.worker = WorkerValidImages()
-    self.thread = QtCore.QThread( self )
-    self.thread.setObjectName( self.nameModulus )
-    self.worker.moveToThread( self.thread )
-    self._connectWorker()
+    super(ValidImages, self).initThread()
 
   def finishThread(self):
-    self._connectWorker( False )
-    self.worker.deleteLater()
-    self.thread.wait()
-    self.thread.deleteLater()
-    self.thread = self.worker = None
+    super(ValidImages, self).finishThread()
 
   def _connectWorker(self, isConnect = True):
-    ss = [
-      { 'signal': self.thread.started,   'slot': self.worker.run },
-      { 'signal': self.worker.finished,  'slot': self.finishedWorker }
-    ]
-    if isConnect:
-      for item in ss:
-        item['signal'].connect( item['slot'] )  
-    else:
-      for item in ss:
-        item['signal'].disconnect( item['slot'] )
+    super(ValidImages, self)._connectWorker( isConnect )
 
-  @QtCore.pyqtSlot()
-  def finishedWorker(self):
-    self.thread.quit()
-    self.finished.emit()
+  @QtCore.pyqtSlot(dict)
+  def finishedWorker(self, data):
+    super(ValidImages, self).finishedWorker(data)
 
   def run(self, dataDlgFootprint, images):
     self.msgBar.clearWidgets()
@@ -179,8 +140,8 @@ class ValidImages(QtCore.QObject):
     msg = " and its subdirectories" if data['hasSubDir'] else ""
     d = ( data['dirImages'], msg )
     msg = "Searching images in '%s'%s..." % d
-    self.mbc = MessageBarCancel( self.pluginName, msg )
-    self.msgBar.pushWidget( self.mbc.msgBarItem, QgsGui.QgsMessageBar.INFO )
+    self.mb = MessageBarCancel( self.pluginName, msg )
+    self.msgBar.pushWidget( self.mb.msgBarItem, QgsGui.QgsMessageBar.INFO )
     
     self.worker.setData( data )
     WorkerValidImages.isKilled = False

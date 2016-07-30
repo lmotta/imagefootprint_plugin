@@ -21,7 +21,9 @@ email                : motta.luiz@gmail.com
 import os, struct, json
 
 from PyQt4 import ( QtCore, QtGui )
-from qgis import ( gui as QgsGui, core as QgsCore, utils as QgsUtils )
+from qgis import ( gui as QgsGui, core as QgsCore )
+
+from processtemplate import WorkerTemplate, MessageBarTemplate, ProcessTemplate
 
 from osgeo import ( gdal, osr, ogr )
 from gdalconst import GA_ReadOnly
@@ -298,10 +300,8 @@ class Footprint():
     
     return True
 
-class WorkerPopulateCatalog(QtCore.QObject):
-  finished = QtCore.pyqtSignal(int, int)
+class WorkerPopulateCatalog(WorkerTemplate):
   processed = QtCore.pyqtSignal()
-  isKilled = False
 
   def __init__(self):
     super(WorkerPopulateCatalog, self).__init__()
@@ -374,30 +374,15 @@ class WorkerPopulateCatalog(QtCore.QObject):
       self.provLayer.addFeatures( [ feat ] )
       self.processed.emit()
       
-    self.finished.emit( totalAdded, totalError )
+    self.finished.emit( { 'totalAdded': totalAdded, 'totalError': totalError } )
 
-class MessageBarProgress(QtCore.QObject):
+class MessageBarProgress(MessageBarTemplate):
   def __init__(self, pluginName, msg):
-    def initGui():
-      def setCancel():
-        self.tbCancel.setIcon( QtGui.QIcon(":/images/themes/default/mActionFileExit.png") )
-        self.tbCancel.setText( "Cancel")
-        self.tbCancel.setToolButtonStyle( QtCore.Qt.ToolButtonTextBesideIcon )
-
-      self.msgBarItem = QgsUtils.iface.messageBar().createMessage( pluginName, msg )
-      self.pb = QtGui.QProgressBar( self.msgBarItem )
-      self.pb.setAlignment( QtCore.Qt.AlignLeft )
-      self.tbCancel = QtGui.QToolButton( self.msgBarItem )
-      setCancel()
-      
-      lyt = self.msgBarItem.layout()
-      lyt.addWidget( self.tbCancel )
-      lyt.addWidget( self.pb )
-
-    super(MessageBarProgress, self).__init__()
-    self.msgBarItem = self.pb = self.tbCancel = None
-    initGui()
-    self.tbCancel.clicked.connect( self.clickedCancel )
+    super(MessageBarProgress, self).__init__( pluginName, msg )
+    self.pb = QtGui.QProgressBar( self.msgBarItem )
+    self.pb.setAlignment( QtCore.Qt.AlignLeft )
+    lyt = self.msgBarItem.layout()
+    lyt.addWidget( self.pb )
     
   def init(self, maximum):
     self.pb.setValue( 0 )
@@ -410,63 +395,40 @@ class MessageBarProgress(QtCore.QObject):
 
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
+    super(MessageBarProgress, self).clickedCancel( checked )
     Footprint.isKilled = True
     WorkerPopulateCatalog.isKilled = True
-    self.tbCancel.setEnabled( False )
 
-class PopulateCatalog(QtCore.QObject):
-  finished = QtCore.pyqtSignal(dict)
-
+class PopulateCatalog(ProcessTemplate):
   def __init__(self, pluginName, nameModulus):
-    super(PopulateCatalog, self).__init__()
-    self.pluginName, self.nameModulus = pluginName, nameModulus
-    self.worker = self.thread = self.mbp = None
-    self.msgBar = QgsUtils.iface.messageBar()
-    self.initThread()
+    super(PopulateCatalog, self).__init__( pluginName, nameModulus )
     
   def __del__(self):
-    self.finishThread()
+    super(PopulateCatalog, self).__del__()
 
   def initThread(self):
     self.worker = WorkerPopulateCatalog()
-    self.thread = QtCore.QThread( self )
-    self.thread.setObjectName( self.nameModulus )
-    self.worker.moveToThread( self.thread )
-    self._connectWorker()
+    super(PopulateCatalog, self).initThread()
+    self.ss.append( { 'signal': self.worker.processed, 'slot': self.processedWorker } )
 
   def finishThread(self):
-    self._connectWorker( False )
-    self.worker.deleteLater()
-    self.thread.wait()
-    self.thread.deleteLater()
-    self.thread = self.worker = None
+    super(PopulateCatalog, self).finishThread()
 
   def _connectWorker(self, isConnect = True):
-    ss = [
-      { 'signal': self.thread.started,   'slot': self.worker.run },
-      { 'signal': self.worker.finished,  'slot': self.finishedWorker },
-      { 'signal': self.worker.processed, 'slot': self.processedWorker }
-    ]
-    if isConnect:
-      for item in ss:
-        item['signal'].connect( item['slot'] )  
-    else:
-      for item in ss:
-        item['signal'].disconnect( item['slot'] )
+    super(PopulateCatalog, self)._connectWorker( isConnect )
 
-  @QtCore.pyqtSlot(int, int)
-  def finishedWorker(self, totalAdded, totalError):
-    self.thread.quit()
-    self.finished.emit( { 'totalAdded': totalAdded, 'totalError': totalError } )
+  @QtCore.pyqtSlot(dict)
+  def finishedWorker(self, data):
+    super(PopulateCatalog, self).finishedWorker( data )
 
   @QtCore.pyqtSlot()
   def processedWorker(self):
-    self.mbp.step( 1 )
+    self.mb.step( 1 )
 
   def run(self, provLayer, dataDlgFootprint, images):
     self.msgBar.clearWidgets()
-    self.mbp = MessageBarProgress( self.pluginName, "" )
-    self.msgBar.pushWidget( self.mbp.msgBarItem, QgsGui.QgsMessageBar.INFO )
+    self.mb = MessageBarProgress( self.pluginName, "" )
+    self.msgBar.pushWidget( self.mb.msgBarItem, QgsGui.QgsMessageBar.INFO )
     
     data = {
       'sources': images,
@@ -475,7 +437,7 @@ class PopulateCatalog(QtCore.QObject):
       'wktCrsImages': dataDlgFootprint['wktCrsImages']
     }
     
-    self.mbp.init( len( images ) )
+    self.mb.init( len( images ) )
     self.worker.setData( data )
     WorkerPopulateCatalog.isKilled, Footprint.isKilled = False, False
     self.thread.start()
