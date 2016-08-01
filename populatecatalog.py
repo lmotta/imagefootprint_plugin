@@ -392,6 +392,7 @@ class MessageBarProgress(MessageBarTemplate):
   def step(self, step):
     value = self.pb.value() + step 
     self.pb.setValue( value )
+    self.msgBarItem.setText( "%d/%d" % ( value, self.pb.maximum() ) )
 
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
@@ -400,26 +401,10 @@ class MessageBarProgress(MessageBarTemplate):
     WorkerPopulateCatalog.isKilled = True
 
 class PopulateCatalog(ProcessTemplate):
-  def __init__(self, pluginName, nameModulus):
-    super(PopulateCatalog, self).__init__( pluginName, nameModulus )
-    
-  def __del__(self):
-    super(PopulateCatalog, self).__del__()
-
   def initThread(self):
     self.worker = WorkerPopulateCatalog()
     super(PopulateCatalog, self).initThread()
     self.ss.append( { 'signal': self.worker.processed, 'slot': self.processedWorker } )
-
-  def finishThread(self):
-    super(PopulateCatalog, self).finishThread()
-
-  def _connectWorker(self, isConnect = True):
-    super(PopulateCatalog, self)._connectWorker( isConnect )
-
-  @QtCore.pyqtSlot(dict)
-  def finishedWorker(self, data):
-    super(PopulateCatalog, self).finishedWorker( data )
 
   @QtCore.pyqtSlot()
   def processedWorker(self):
