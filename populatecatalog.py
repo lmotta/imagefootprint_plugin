@@ -23,7 +23,7 @@ import os, struct, json
 from PyQt4 import ( QtCore, QtGui )
 from qgis import ( gui as QgsGui, core as QgsCore )
 
-from processtemplate import WorkerTemplate, MessageBarTemplate, ProcessTemplate
+from processtemplate import WorkerTemplate, MessageBarTemplate, ProcessMultiTemplate
 
 from osgeo import ( gdal, osr, ogr )
 from gdalconst import GA_ReadOnly
@@ -95,8 +95,10 @@ class Footprint():
       self.metadata.update( getMetadataSR() )
     
     def getDatasetMem(datatype):
-      ds = drv_mem.Create( '', self.metadata['raster_size']['x'], self.metadata['raster_size']['y'], 1, datatype )
-      if ds is None:
+      ds = None
+      try:
+        ds = drv_mem.Create( '', self.metadata['raster_size']['x'], self.metadata['raster_size']['y'], 1, datatype )
+      except RuntimeError:
         return None
       ds.SetProjection( self.metadata['wkt_sr'] )
       ds.SetGeoTransform( self.metadata['transform'] )
@@ -127,8 +129,9 @@ class Footprint():
       field = ogr.FieldDefn("dn", ogr.OFTInteger)
       layer_poly.CreateField( field )
       idField = 0
-      gdal.Polygonize( band_sieve, None, layer_poly, idField, [], callback=None )
-      if gdal.GetLastErrorType() != 0:
+      try:
+        gdal.Polygonize( band_sieve, None, layer_poly, idField, [], callback=None )
+      except RuntimeError:
         return { 'isOk': False, 'msg': gdal.GetLastErrorMsg() }
       geoms = []
       layer_poly.SetAttributeFilter("dn = 1")
@@ -141,7 +144,7 @@ class Footprint():
     def addArea(geom):
       area = None
       area_img = None
-      typeFootprint = "Valid pixeis" if self.hasValidPixels else "Bound box"
+      typeFootprint = "Valid pixeis" if self.hasValidPixels else "Bounding box"
       if not self.metadata['crs']['is_geographic']:
         area = geom.GetArea()
         area_img = { 'is_calculate': True, 'ha': area / 10000 }
@@ -251,11 +254,14 @@ class Footprint():
       return False
 
     band_sieve = ds_sieve.GetRasterBand(1)
-    gdal.SieveFilter( band_mask, None, band_sieve, pSieve['threshold'], pSieve['connectedness'], [], callback=None )
-    ds_mask = band_mask = None
-    if gdal.GetLastErrorType() != 0:
+    try:
+      gdal.SieveFilter( band_mask, None, band_sieve, pSieve['threshold'], pSieve['connectedness'], [], callback=None )
+    except RuntimeError:
       self.msgError = gdal.GetLastErrorMsg()
+      ds_mask = band_mask = None
       return False
+
+    ds_mask = band_mask = None
     
     if self.isKilled:
       ds_sieve = band_sieve = None
@@ -301,19 +307,17 @@ class Footprint():
     return True
 
 class WorkerPopulateCatalog(WorkerTemplate):
-  processed = QtCore.pyqtSignal()
-
   def __init__(self):
     super(WorkerPopulateCatalog, self).__init__()
-    self.provLayer = self.foot = self.featTemplate = None
+    self.foot = self.featTemplate = None
     self.lstSources = self.ct = None
 
   def setData(self, data):
-    self.provLayer = data['provLayer']
+    self.idWorker = data['idWorker']
     self.lstSources = data[ 'sources' ]
-    self.featTemplate = QgsCore.QgsFeature( self.provLayer.fields() )
+    self.featTemplate = QgsCore.QgsFeature( data['provLayer'].fields() )
     self.ct = QgsCore.QgsCoordinateTransform()
-    self.ct.setDestCRS( self.provLayer.crs() )
+    self.ct.setDestCRS( data['provLayer'].crs() )
     self.foot = Footprint( data['hasValidPixels'], data['wktCrsImages'] )
 
   @QtCore.pyqtSlot()
@@ -371,28 +375,35 @@ class WorkerPopulateCatalog(WorkerTemplate):
       if self.isKilled:
         del feat
         break
-      self.provLayer.addFeatures( [ feat ] )
-      self.processed.emit()
-      
-    self.finished.emit( { 'totalAdded': totalAdded, 'totalError': totalError } )
+      self.processed.emit( { 'feats': [ feat ] } )
+
+    data = { 'idWorker': self.idWorker, 'totalAdded': totalAdded, 'totalError': totalError }
+    self.finished.emit( data )
+
+  @staticmethod
+  def totalKeys():
+    return ( 'totalAdded', 'totalError' )
 
 class MessageBarProgress(MessageBarTemplate):
   def __init__(self, pluginName, msg):
     super(MessageBarProgress, self).__init__( pluginName, msg )
     self.pb = QtGui.QProgressBar( self.msgBarItem )
     self.pb.setAlignment( QtCore.Qt.AlignLeft )
+    self.lCount = QtGui.QLabel( self.msgBarItem )
     lyt = self.msgBarItem.layout()
+    lyt.addWidget( self.lCount )
     lyt.addWidget( self.pb )
+    
     
   def init(self, maximum):
     self.pb.setValue( 0 )
     self.pb.setMaximum( maximum )
-    self.msgBarItem.setText( "Total %d" % maximum )
   
   def step(self, step):
     value = self.pb.value() + step 
     self.pb.setValue( value )
-    self.msgBarItem.setText( "%d/%d" % ( value, self.pb.maximum() ) )
+    lCount = "%d/%d" % ( value, self.pb.maximum() ) 
+    self.lCount.setText( lCount )
 
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
@@ -400,30 +411,30 @@ class MessageBarProgress(MessageBarTemplate):
     Footprint.isKilled = True
     WorkerPopulateCatalog.isKilled = True
 
-class PopulateCatalog(ProcessTemplate):
-  def initThread(self):
-    self.worker = WorkerPopulateCatalog()
-    super(PopulateCatalog, self).initThread()
-    self.ss.append( { 'signal': self.worker.processed, 'slot': self.processedWorker } )
+class PopulateCatalog(ProcessMultiTemplate):
+  def __init__(self, pluginName,  nameModulus):
+    super(PopulateCatalog, self).__init__( pluginName,  nameModulus, WorkerPopulateCatalog )
+    self.provLayer = None
 
-  @QtCore.pyqtSlot()
-  def processedWorker(self):
-    self.mb.step( 1 )
+  @QtCore.pyqtSlot(dict)
+  def processedWorkers(self, data):
+    super(PopulateCatalog, self).processedWorkers( data )
+    if not WorkerPopulateCatalog.isKilled:
+      self.provLayer.addFeatures( data['feats'] )
 
   def run(self, provLayer, dataDlgFootprint, images):
     self.msgBar.clearWidgets()
-    self.mb = MessageBarProgress( self.pluginName, "" )
+    msg = "Using %d processors" % self.totalProcess
+    self.mb = MessageBarProgress( self.pluginName, msg )
     self.msgBar.pushWidget( self.mb.msgBarItem, QgsGui.QgsMessageBar.INFO )
     
     data = {
-      'sources': images,
       'provLayer': provLayer,
       'hasValidPixels': dataDlgFootprint['hasValidPixels'] ,
       'wktCrsImages': dataDlgFootprint['wktCrsImages']
     }
     
     self.mb.init( len( images ) )
-    self.worker.setData( data )
     WorkerPopulateCatalog.isKilled, Footprint.isKilled = False, False
-    self.thread.start()
-    #self.worker.run() # DEBUG
+    self.provLayer = provLayer
+    super( PopulateCatalog, self ).run( data, images )

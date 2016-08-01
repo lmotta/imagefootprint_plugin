@@ -262,7 +262,7 @@ class CatalogFootprint(QtCore.QObject):
     self.vi.finished.connect( finishedValidImages )
     self.vi.run( dataDlgFootprint, self.images )
     
-  @staticmethod  
+  @staticmethod
   def copyExpression():
     f = os.path.dirname
     fromFile = os.path.join( f( __file__ ), CatalogFootprint.expressionFile )

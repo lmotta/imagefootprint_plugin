@@ -23,17 +23,21 @@ from qgis import utils as QgsUtils
 
 class WorkerTemplate(QtCore.QObject):
   finished = QtCore.pyqtSignal(dict)
+  processed = QtCore.pyqtSignal(dict) # For ProcessMultiTemplate
   isKilled = False
 
   def __init__(self):
     super(WorkerTemplate, self).__init__()
+    self.idWorker = None # For ProcessMultiTemplate
 
 #  def setData(self, data):
-#    pass
+#    self.idWorker = data['idWorker']
+#    ...
 
 #  @QtCore.pyqtSlot()
 #  def run(self):
-#    self.finished.emit()
+#    data['idWorker'] = self.idWorker
+#    self.finished.emit(data)
 
 class MessageBarTemplate(QtCore.QObject):
   def __init__(self, pluginName, msg ):
@@ -88,7 +92,7 @@ class ProcessTemplate(QtCore.QObject):
     self.worker.deleteLater()
     self.thread.wait()
     self.thread.deleteLater()
-    self.thread = self.worker = None
+    self.thread, self.worker = None, None
 
   def _connectWorker(self, isConnect = True):
     if isConnect:
@@ -114,3 +118,89 @@ class ProcessTemplate(QtCore.QObject):
     self.thread.start()
     #self.worker.run() # DEBUG
 """
+
+class ProcessMultiTemplate(QtCore.QObject):
+  finished = QtCore.pyqtSignal(dict)
+  
+  def __init__(self, pluginName, nameModulus, templateWorker):
+    super(ProcessMultiTemplate, self).__init__()
+    self.pluginName, self.nameModulus, self.templateWorker = pluginName, nameModulus, templateWorker
+    self.totalProcess, self.countTotalProcess = QtCore.QThread.idealThreadCount(), None
+    self.workers, self.threads, self.ss = {}, {}, {}
+    self.totalKeys = {}
+    for key in templateWorker.totalKeys():
+      self.totalKeys[ key ] = None
+    self.mb = None
+    self.msgBar = QgsUtils.iface.messageBar()
+    self.initThreads()
+    self._connectWorkers()
+    
+  def __del__(self):
+    self.finishThreads()
+
+  def initThreads(self):
+    for i in xrange( self.totalProcess ):
+      self.workers[ i ] = self.templateWorker()
+      self.threads[ i ] = QtCore.QThread( self )
+      self.threads[ i ].setObjectName( "%s - %d" % ( self.nameModulus, i+1 ) )
+      self.workers[ i ].moveToThread( self.threads[ i ] )
+      self.ss[ i ] = [
+        { 'signal': self.threads[ i ].started,   'slot': self.workers[ i ].run },
+        { 'signal': self.workers[ i ].finished,  'slot': self.finishedWorkers },
+        { 'signal': self.workers[ i ].processed, 'slot': self.processedWorkers }
+      ]
+ 
+  def finishThreads(self):
+    self._connectWorkers( False )
+    for i in xrange( self.totalProcess ):
+      self.workers[ i ].deleteLater()
+      self.threads[ i ].wait()
+      self.threads[ i ].deleteLater()
+      self.threads[ i ], self.workers[ i ] = None, None
+
+  def _connectWorkers(self, isConnect = True):
+    if isConnect:
+      for i in xrange( self.totalProcess ):
+        for item in self.ss[ i ]:
+          item['signal'].connect( item['slot'] )  
+    else:
+      for i in xrange( self.totalProcess ):
+        for item in self.ss[ i ]:
+          item['signal'].disconnect( item['slot'] )
+
+  @QtCore.pyqtSlot(dict)
+  def finishedWorkers(self, data):
+    self.threads[ data['idWorker'] ].quit()
+    self.countTotalProcess += 1
+    for key in self.totalKeys.keys():
+      self.totalKeys[ key ] += data[ key ]
+    if self.countTotalProcess == self.totalProcess:
+      self.finished.emit( self.totalKeys )
+
+  @QtCore.pyqtSlot(dict)
+  def processedWorkers(self, data):
+    self.mb.step( 1 )
+
+  def run(self, data, images):
+    def generatorSplitImages():
+      a = images
+      n = self.totalProcess
+      # Resolution by http://stackoverflow.com/users/220672/tixxit
+      # Python: A: splitting a list of arbitrary size into only roughly N-equal parts
+      k, m = len(a) / n, len(a) % n
+      return (a[i * k + min(i, m):(i + 1) * k + min(i + 1, m)] for i in xrange(n))
+
+    for key in self.totalKeys.keys():
+      self.totalKeys[ key ] = 0
+    self.countTotalProcess = 0
+    gen = generatorSplitImages()
+    for i in xrange( self.totalProcess ):
+      data['sources'] = gen.next()
+      data['idWorker'] = i
+      self.workers[ i ].setData( data )
+    gen.close()
+    for i in xrange( self.totalProcess ):
+      self.threads[ i ].start()
+      #self.workers[ i ].run() # DEBUG
+      
+    
