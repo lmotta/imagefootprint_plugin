@@ -99,15 +99,12 @@ class WorkerValidImages(WorkerTemplate):
     self.finished.emit({})
 
 class MessageBarCancel(MessageBarTemplate):
-  @QtCore.pyqtSlot(bool)
-  def clickedCancel(self, checked):
-    super(MessageBarCancel, self).clickedCancel( checked )
-    WorkerValidImages.isKilled = True
+  def __init__(self, pluginName, msg):
+    super(MessageBarCancel, self).__init__( pluginName, msg, [ WorkerValidImages ] )
 
 class ValidImages(ProcessTemplate):
-  def initThread(self):
-    self.worker = WorkerValidImages()
-    super(ValidImages, self).initThread()
+  def __init__(self, pluginName,  nameModulus):
+    super(ValidImages, self).__init__( pluginName,  nameModulus, WorkerValidImages )
 
   def run(self, dataDlgFootprint, images):
     self.msgBar.clearWidgets()

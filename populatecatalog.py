@@ -41,6 +41,7 @@ class Footprint():
     gdal.GDT_Float64: 'd'
   }
   isKilled = False
+  factorTolerance = 4 # multiply (resX + resY) / 2
 
   def __init__(self, hasValidPixels, wktSRS=None):
     self.hasValidPixels = hasValidPixels
@@ -162,15 +163,20 @@ class Footprint():
       self.metadata.update( { 'area': area_img } ) 
 
     def addGeom(geom):
-      self.metadata.update( { 'wkt_geom': geom.ExportToWkt() } )
       num_parts = geom.GetGeometryCount()
       num_holes = 0
       for i in xrange( num_parts ):
-        num_rings =  geom.GetGeometryRef( i ).GetGeometryCount()
+        poly = geom.GetGeometryRef( i )
+        num_rings =  poly.GetGeometryCount()
         if num_rings > 1:
-          num_holes += num_rings - 1           
+          num_holes += num_rings - 1
+      
       value = { 'num_parts': num_parts, 'num_holes': num_holes }
       self.metadata.update( { 'geometry':  value } )
+      tol = ( self.metadata['raster_size']['resX'] + self.metadata['raster_size']['resY'] ) / 2.0
+      tol *= self.factorTolerance
+      wkt_geom = geom.SimplifyPreserveTopology( tol ).ExportToWkt()
+      self.metadata.update( { 'wkt_geom': wkt_geom } )
 
     def getBoundBox():
       def getXY( col, line):
@@ -298,7 +304,7 @@ class Footprint():
     geom = geomUnion.UnionCascaded()
     geomUnion.Destroy()
     addArea( geom )
-    addGeom( geom.ConvexHull() )
+    addGeom( geom )
     geom.Destroy()
     del self.metadata['transform']
     del self.metadata['type_band1']
@@ -386,7 +392,7 @@ class WorkerPopulateCatalog(WorkerTemplate):
 
 class MessageBarProgress(MessageBarTemplate):
   def __init__(self, pluginName, msg):
-    super(MessageBarProgress, self).__init__( pluginName, msg )
+    super(MessageBarProgress, self).__init__( pluginName, msg, [ WorkerPopulateCatalog, Footprint ] )
     self.pb = QtGui.QProgressBar( self.msgBarItem )
     self.pb.setAlignment( QtCore.Qt.AlignLeft )
     self.lCount = QtGui.QLabel( self.msgBarItem )
@@ -396,7 +402,7 @@ class MessageBarProgress(MessageBarTemplate):
     
     
   def init(self, maximum):
-    self.pb.setValue( 0 )
+    self.pb.setValue( 1 )
     self.pb.setMaximum( maximum )
   
   def step(self, step):
@@ -404,12 +410,6 @@ class MessageBarProgress(MessageBarTemplate):
     self.pb.setValue( value )
     lCount = "%d/%d" % ( value, self.pb.maximum() ) 
     self.lCount.setText( lCount )
-
-  @QtCore.pyqtSlot(bool)
-  def clickedCancel(self, checked):
-    super(MessageBarProgress, self).clickedCancel( checked )
-    Footprint.isKilled = True
-    WorkerPopulateCatalog.isKilled = True
 
 class PopulateCatalog(ProcessMultiTemplate):
   def __init__(self, pluginName,  nameModulus):

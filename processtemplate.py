@@ -30,17 +30,11 @@ class WorkerTemplate(QtCore.QObject):
     super(WorkerTemplate, self).__init__()
     self.idWorker = None # For ProcessMultiTemplate
 
-#  def setData(self, data):
-#    self.idWorker = data['idWorker']
-#    ...
-
-#  @QtCore.pyqtSlot()
-#  def run(self):
-#    data['idWorker'] = self.idWorker
-#    self.finished.emit(data)
+  #def setData(self, data):
+  #def run(self): # @QtCore.pyqtSlot()
 
 class MessageBarTemplate(QtCore.QObject):
-  def __init__(self, pluginName, msg ):
+  def __init__(self, pluginName, msg, killeds ):
     def initGui():
       def setCancel():
         self.tbCancel.setIcon( QtGui.QIcon(":/images/themes/default/mActionFileExit.png") )
@@ -54,6 +48,7 @@ class MessageBarTemplate(QtCore.QObject):
       lyt.addWidget( self.tbCancel )
 
     super(MessageBarTemplate, self).__init__()
+    self.killeds = killeds
     self.msgBarItem = self.tbCancel = None
     initGui()
     self.tbCancel.clicked.connect( self.clickedCancel )
@@ -61,14 +56,15 @@ class MessageBarTemplate(QtCore.QObject):
   @QtCore.pyqtSlot(bool)
   def clickedCancel(self, checked):
     self.tbCancel.setEnabled( False )
-    #Worker??.isKilled = True
+    for i in xrange( len( self.killeds ) ):
+      self.killeds[ i ].isKilled = True
 
 class ProcessTemplate(QtCore.QObject):
   finished = QtCore.pyqtSignal(dict)
   
-  def __init__(self, pluginName, nameModulus):
+  def __init__(self, pluginName, nameModulus, templateWorker):
     super(ProcessTemplate, self).__init__()
-    self.pluginName, self.nameModulus = pluginName, nameModulus
+    self.pluginName, self.nameModulus, self.templateWorker = pluginName, nameModulus, templateWorker
     self.worker = self.thread = self.mb = self.ss = None
     self.msgBar = QgsUtils.iface.messageBar()
     self.initThread()
@@ -78,7 +74,7 @@ class ProcessTemplate(QtCore.QObject):
     self.finishThread()
 
   def initThread(self):
-    #self.worker = Worker??()
+    self.worker = self.templateWorker()
     self.thread = QtCore.QThread( self )
     self.thread.setObjectName( self.nameModulus )
     self.worker.moveToThread( self.thread )
@@ -106,18 +102,8 @@ class ProcessTemplate(QtCore.QObject):
   def finishedWorker(self, data):
     self.thread.quit()
     self.finished.emit( data )
-"""
-  def run(self, dataDlgFootprint, images):
-    self.msgBar.clearWidgets()
-    self.mb = MessageBar??( self.pluginName, msg )
-    self.msgBar.pushWidget( self.mb.msgBarItem, QgsGui.QgsMessageBar.INFO )
-    data ??
-    self.mb.init() ??
-    self.worker.setData( data )
-    Worker??.isKilled = False
-    self.thread.start()
-    #self.worker.run() # DEBUG
-"""
+  
+  #def run(self, dataDlgFootprint, images):
 
 class ProcessMultiTemplate(QtCore.QObject):
   finished = QtCore.pyqtSignal(dict)
@@ -170,12 +156,18 @@ class ProcessMultiTemplate(QtCore.QObject):
 
   @QtCore.pyqtSlot(dict)
   def finishedWorkers(self, data):
-    self.threads[ data['idWorker'] ].quit()
-    self.countTotalProcess += 1
-    for key in self.totalKeys.keys():
-      self.totalKeys[ key ] += data[ key ]
-    if self.countTotalProcess == self.totalProcess:
-      self.finished.emit( self.totalKeys )
+    if self.templateWorker.isKilled:
+      for i in xrange( self.totalProcess):
+        if self.threads[ i ].isRunning():
+          self.threads[ i ].quit()
+      self.finished.emit( {} )
+    else:
+      self.threads[ data['idWorker'] ].quit()
+      self.countTotalProcess += 1
+      for key in self.totalKeys.keys():
+        self.totalKeys[ key ] += data[ key ]
+      if self.countTotalProcess == self.totalProcess:
+        self.finished.emit( self.totalKeys )
 
   @QtCore.pyqtSlot(dict)
   def processedWorkers(self, data):
@@ -202,5 +194,3 @@ class ProcessMultiTemplate(QtCore.QObject):
     for i in xrange( self.totalProcess ):
       self.threads[ i ].start()
       #self.workers[ i ].run() # DEBUG
-      
-    
