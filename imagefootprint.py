@@ -325,7 +325,7 @@ class CatalogFootprint(QtCore.QObject):
       rb.setWidth( 2 )
       rb.setToGeometry( QgsCore.QgsGeometry.fromRect( extent ), None )
       QtCore.QTimer.singleShot( 2000, removeRB )
-    
+
     # Actions functions
     def show_hideImage():
       vreturn = _getRasterLayer()
