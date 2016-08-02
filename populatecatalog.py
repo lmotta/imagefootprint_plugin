@@ -220,7 +220,7 @@ class Footprint():
     if self.isKilled:
       return False
 
-    band_img = ds_img.GetRasterBand( 1 )
+    band_img = ds_img.GetRasterBand( self.metadata['bands']['number'] )
     self.metadata.update( { 'type_band1': band_img.DataType } )
 
     if not self.metadata['type_band1'] in self.gdal_sctruct_types.keys():
@@ -404,11 +404,12 @@ class MessageBarProgress(MessageBarTemplate):
   def init(self, maximum):
     self.pb.setValue( 1 )
     self.pb.setMaximum( maximum )
-  
+    self.lCount.setText( "1/%d" % maximum )
+
   def step(self, step):
     value = self.pb.value() + step 
     self.pb.setValue( value )
-    lCount = "%d/%d" % ( value, self.pb.maximum() ) 
+    lCount = "%d/%d" % ( value, self.pb.maximum() )
     self.lCount.setText( lCount )
 
 class PopulateCatalog(ProcessMultiTemplate):
@@ -424,7 +425,7 @@ class PopulateCatalog(ProcessMultiTemplate):
 
   def run(self, provLayer, dataDlgFootprint, images):
     self.msgBar.clearWidgets()
-    msg = "Using %d processors" % self.totalProcess
+    msg = "Using until %d processors" % self.totalProcess
     self.mb = MessageBarProgress( self.pluginName, msg )
     self.msgBar.pushWidget( self.mb.msgBarItem, QgsGui.QgsMessageBar.INFO )
     
