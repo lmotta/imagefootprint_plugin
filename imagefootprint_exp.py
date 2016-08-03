@@ -52,6 +52,12 @@ def getValueFromMetadataFootprint(values, feature, parent):
 
 @QgsCore.qgsfunction(args=1, group='Image Footprint')
 def getDirName(values, feature, parent):
+  """
+  <h4>Return</h4>Get the name diretory of file name
+  <p><h4>Syntax</h4>getDirName('filename')</p>
+  <p><h4>Argument</h4>filename -> String with path and name of file</p>
+  <p><h4>Example</h4>getDirName( '/home/lmotta/temp/test.tif' )</p><p>Return: '/home/lmotta/temp'</p>
+  """
   return os.path.dirname( values[0] )
 
 @QgsCore.qgsfunction(args=1, group='Image Footprint')

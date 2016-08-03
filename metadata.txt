@@ -1,7 +1,7 @@
 [general]
 name=Image Footprint
 description=Plugin for create a catalog layer from directories of images.
-about=This plugin create a catalog layer from directories of images, how a memory layer, each feature has metadata and footprint of a image.
+about=This plugin create a catalog layer from directories of images, how a memory layer, where each feature has metadata and footprint of a image.
   See presentation in http://pt.slideshare.net/LuizMotta3/??
   This plugin is developed on the demand of IBAMA(Brazilian Institute of Environment and Renewable Natural Resources)
   http://www.ibama.gov.br

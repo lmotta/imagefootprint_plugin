@@ -6,7 +6,7 @@
 
 # Image Footprint
 
-This plugin create a catalog layer from directories of images, how a memory layer, each feature has metadata and footprint of a image
+This plugin create a catalog layer from directories of images, how a memory layer, where each feature has metadata and footprint of a image
 
 ## Author
 Luiz Motta
