@@ -120,6 +120,8 @@ class Footprint():
         del value
         band_mask.WriteRaster( xoff, row, xsize, ysize, line )
         del line
+        if self.isKilled:
+          break
 
     def getGeomsSieve():
       srs = osr.SpatialReference()
@@ -241,12 +243,11 @@ class Footprint():
       return False
     band_mask = ds_mask.GetRasterBand(1)
 
-    if self.isKilled:
-      ds_img = band_img = None
-      return False
-
     populateMask( datatype_out )
     ds_img = band_img = None
+
+    if self.isKilled:
+      return False
     # Sieve
     pSieve = { 'threshold': 100, 'connectedness': 8 }
     ds_sieve = getDatasetMem( datatype_out )
@@ -399,10 +400,9 @@ class MessageBarProgress(MessageBarTemplate):
     lyt = self.msgBarItem.layout()
     lyt.addWidget( self.lCount )
     lyt.addWidget( self.pb )
-    
-    
+
   def init(self, maximum):
-    self.pb.setValue( 1 )
+    self.pb.setValue( 0 )
     self.pb.setMaximum( maximum )
     self.lCount.setText( "1/%d" % maximum )
 

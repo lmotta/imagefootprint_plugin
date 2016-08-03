@@ -58,6 +58,8 @@ class MessageBarTemplate(QtCore.QObject):
     self.tbCancel.setEnabled( False )
     for i in xrange( len( self.killeds ) ):
       self.killeds[ i ].isKilled = True
+    msg = "Wait! Cancelling processes"
+    self.msgBarItem.setText( msg )
 
 class ProcessTemplate(QtCore.QObject):
   finished = QtCore.pyqtSignal(dict)
@@ -156,18 +158,12 @@ class ProcessMultiTemplate(QtCore.QObject):
 
   @QtCore.pyqtSlot(dict)
   def finishedWorkers(self, data):
-    if self.templateWorker.isKilled:
-      for i in xrange( self.totalProcess):
-        if self.threads[ i ].isRunning():
-          self.threads[ i ].quit()
-      self.finished.emit( {} )
-    else:
-      self.threads[ data['idWorker'] ].quit()
-      self.countTotalProcess += 1
-      for key in self.totalKeys.keys():
-        self.totalKeys[ key ] += data[ key ]
-      if self.countTotalProcess == self.totalProcess:
-        self.finished.emit( self.totalKeys )
+    self.threads[ data['idWorker'] ].quit()
+    self.countTotalProcess += 1
+    for key in self.totalKeys.keys():
+      self.totalKeys[ key ] += data[ key ]
+    if self.countTotalProcess == self.totalProcess:
+      self.finished.emit( self.totalKeys )
 
   @QtCore.pyqtSlot(dict)
   def processedWorkers(self, data):
