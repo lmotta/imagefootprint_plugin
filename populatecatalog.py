@@ -60,16 +60,19 @@ class Footprint():
         sr = osr.SpatialReference()
         sr.ImportFromWkt( ds.GetProjectionRef() )
         is_geographic = False
+        unit_sr = None
         if sr.IsGeographic():
           is_geographic = True
           epsg = sr.GetAuthorityCode('GEOGCS')
+          unit_sr = sr.GetAngularUnitsName()
         elif sr.IsProjected():
           epsg = sr.GetAuthorityCode('PROJCS')
+          unit_sr = sr.GetLinearUnitsName()
         else:
           epsg = None
 
         return {
-          'crs': { 'is_geographic': is_geographic, 'epsg': epsg, 'unit_sr': sr.GetLinearUnitsName() },
+          'crs': { 'is_geographic': is_geographic, 'epsg': epsg, 'unit_sr': unit_sr },
           'sr': sr,
           'wkt_sr': sr.ExportToWkt()
         }
