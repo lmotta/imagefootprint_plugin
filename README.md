@@ -4,13 +4,17 @@
 ![][ibama_logo]  
 [Brazilian Institute of Environment and Renewable Natural Resources](http://www.ibama.gov.br)
 
-# IBAMA tools
+# Image Footprint
 
-Tools for processing framework
+Plugin call Footprint algorithm from IBAMA processing(install by plugin repository)
+Footprint algorithm create a catalog layer from directories of images
+
 
 ## Author
 Luiz Motta
 
 ## Changelog
-- 2019-01-29
-Started plugin
+changelog: 1.0(2019-01-29)
+  Migrate to QGIS 3
+  - 0.1(2016-07-24)
+  Start of plugin
