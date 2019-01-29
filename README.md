@@ -4,14 +4,13 @@
 ![][ibama_logo]  
 [Brazilian Institute of Environment and Renewable Natural Resources](http://www.ibama.gov.br)
 
-# Image Footprint
+# IBAMA tools
 
-This plugin create a catalog layer from directories of images, how a memory layer, where each feature has metadata and footprint of a image
+Tools for processing framework
 
 ## Author
 Luiz Motta
 
 ## Changelog
-- 2016-07-024
+- 2019-01-29
 Started plugin
-

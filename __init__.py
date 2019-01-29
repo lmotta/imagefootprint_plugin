@@ -3,7 +3,7 @@
 /***************************************************************************
 Name                 : Image Footprint
 Description          : Plugin for create a catalog layer from directories of images
-Date                 : July, 2016
+Date                 : July, 2016, At January, 2019 migrate for processing framework
 copyright            : (C) 2016 by Luiz Motta
 email                : motta.luiz@gmail.com
 
@@ -18,67 +18,60 @@ email                : motta.luiz@gmail.com
  *                                                                         *
  ***************************************************************************/
 """
-import os, stat, sys, re, shutil, filecmp
 
-from PyQt4 import ( QtGui, QtCore )
+__author__ = 'Luiz Motta'
+__date__ = '2016-07-24'
+__copyright__ = '(C) 2016, Luiz Motta'
+__revision__ = '$Format:%H$'
 
-from imagefootprint import ( DialogFootprint, CatalogFootprint )
+
+import os
+
+from qgis.PyQt.QtCore import QObject, QCoreApplication, pyqtSlot
+from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtWidgets import QAction
+
+from qgis.core import QgsApplication
+import processing # QGIS Processing
+
+from .translate import Translate
+
 
 def classFactory(iface):
   return ImageFootprintPlugin( iface )
 
-class ImageFootprintPlugin:
-  def __init__(self, iface):
-    self.iface = iface
-    self.namePlugin = u"Image &Footprint"
-    self.action = None
-    CatalogFootprint.copyExpression()
-    self.catalog = CatalogFootprint( self.namePlugin.replace('&', '') )
-    self.catalog.finished.connect( self.enableAction )
-    self.dlgFootprint = None
+class ImageFootprintPlugin(QObject):
+    def __init__(self, iface):
+        super().__init__()
+        self.iface = iface
+        self.namePlugin = u"Image &Footprint"
+        self.action = None
+        self.translate = Translate('imagefootprint')
 
-  def initGui(self):
-    name = self.namePlugin.replace('&', '')
-    about = "Create a catalog layer from directories of images"
-    icon = QtGui.QIcon( os.path.join( os.path.dirname(__file__), 'imagefootprint.svg' ) )
-    self.action = QtGui.QAction( icon, name, self.iface.mainWindow() )
-    self.action.setObjectName( name.replace(' ', '') )
-    self.action.setWhatsThis( about )
-    self.action.setStatusTip( about )
-    self.action.triggered.connect( self.run )
+    def initGui(self):
+        name = self.namePlugin.replace('&', '')
+        about = "Create a catalog layer from directories of images"
+        icon = QIcon( os.path.join( os.path.dirname(__file__), 'footprint.svg' ) )
+        self.action = QAction( icon, name, self.iface.mainWindow() )
+        self.action.setObjectName( name.replace(' ', '') )
+        self.action.setWhatsThis( about )
+        self.action.setStatusTip( about )
+        self.action.triggered.connect( self.run )
 
-    self.iface.addToolBarIcon( self.action )
-    self.iface.addPluginToMenu( self.namePlugin, self.action )
+        self.iface.addToolBarIcon( self.action )
+        self.iface.addPluginToRasterMenu( self.namePlugin, self.action )
 
-  def unload(self):
-    self.iface.removeToolBarIcon( self.action )
-    self.iface.removePluginMenu( self.namePlugin, self.action)
-    del self.action
+    def unload(self):
+        self.iface.removeToolBarIcon( self.action )
+        self.iface.removePluginRasterMenu( self.namePlugin, self.action)
+        del self.action
 
-  @QtCore.pyqtSlot()
-  def enableAction(self):
-    self.action.setEnabled(True)
-
-  @QtCore.pyqtSlot()
-  def run(self):
-    if self.dlgFootprint is None:
-      self.dlgFootprint = DialogFootprint( self.namePlugin.replace('&', '') )
-      self.dlgFootprint.show()
-      self.dlgFootprint.setFixedSize( self.dlgFootprint.size() )
-      self.dlgFootprint.hide()
-
-    if self.dlgFootprint.isVisible():
-      self.dlgFootprint.activateWindow()
-      return
-
-    if self.dlgFootprint.exec_() == QtGui.QDialog.Accepted:
-      data = {
-        'dirImages': self.dlgFootprint.dirImages,
-        'filters': self.dlgFootprint.textFilters,
-        'hasInverse': self.dlgFootprint.hasInverse,
-        'wktCrsImages': self.dlgFootprint.wktCrsImages,
-        'hasValidPixels': self.dlgFootprint.hasValidPixels,
-        'hasSubDir': self.dlgFootprint.hasSubDir
-      }
-      self.action.setEnabled(False)
-      self.catalog.run( data )
+    @pyqtSlot(bool)
+    def run(self, checked):
+        algorith = QgsApplication.processingRegistry().algorithmById ('ibama:Footprint')
+        if algorith is None:
+            title = self.namePlugin.replace('&', '')
+            msg = QCoreApplication.translate('Footprint', 'This plugin NEED the install IBAMA processing plugin.')
+            self.iface.messageBar().pushCritical ( title, msg )
+            return
+        processing.createAlgorithmDialog( algorith ).show()
