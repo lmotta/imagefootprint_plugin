@@ -32,7 +32,7 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
 from qgis.core import QgsApplication
-import processing # QGIS Processing
+import processing # /usr/share/qgis/python/plugins/processing
 
 from .translate import Translate
 
@@ -68,10 +68,14 @@ class ImageFootprintPlugin(QObject):
 
     @pyqtSlot(bool)
     def run(self, checked):
-        algorith = QgsApplication.processingRegistry().algorithmById ('ibama:Footprint')
-        if algorith is None:
+        # Return: False or QgsProcessingAlgorithmDialogBase
+        nameAlgorithm = 'ibama:Footprint'
+        dlg = processing.createAlgorithmDialog( nameAlgorithm )
+        if dlg == False:
             title = self.namePlugin.replace('&', '')
-            msg = QCoreApplication.translate('Footprint', 'This plugin NEED the install IBAMA processing plugin.')
+            msg = QCoreApplication.translate('Footprint', "This plugin NEED the Algorithm '{}'. Installed by IBAMA processing plugin.")
+            msg = msg.format( nameAlgorithm )
             self.iface.messageBar().pushCritical ( title, msg )
             return
-        processing.createAlgorithmDialog( algorith ).show()
+        dlg.show()
+

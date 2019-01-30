@@ -6,7 +6,7 @@
 
 # Image Footprint
 
-Plugin call Footprint algorithm from IBAMA processing(install by plugin repository)
+Plugin call Footprint algorithm from IBAMA processing(install by plugin repository).
 Footprint algorithm create a catalog layer from directories of images
 
 
