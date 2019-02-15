@@ -75,7 +75,7 @@ class ImageFootprintPlugin(QObject):
             title = self.namePlugin.replace('&', '')
             msg = QCoreApplication.translate('Footprint', "This plugin NEED the Algorithm '{}'. Installed by IBAMA processing plugin.")
             msg = msg.format( nameAlgorithm )
-            self.iface.messageBar().pushCritical ( title, msg )
+            self.iface.messageBar().pushCritical( title, msg )
             return
         dlg.show()
 
