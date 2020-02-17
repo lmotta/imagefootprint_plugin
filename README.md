@@ -14,7 +14,9 @@ Footprint algorithm create a catalog layer from directories of images
 Luiz Motta
 
 ## Changelog
-changelog: 1.0(2019-01-29)
-  Migrate to QGIS 3
-  - 0.1(2016-07-24)
-  Start of plugin
+- 2020-02-17
+Changed deprecated:True
+- 2019-01-29
+Migrate to QGIS 3
+- 2016-07-24
+Start of plugin

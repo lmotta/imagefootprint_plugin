@@ -6,7 +6,7 @@ about:Footprint algorithm create a catalog layer from directories of images.
   http://www.ibama.gov.br
   * Footprint Icon made by Freepik (http://www.freepik.com) from www.flaticon.com is licensed by Creative Commons BY 3.0
 
-version:1.0
+version:1.1
 qgisMinimumVersion:3.2
 
 author:Luiz Motta
@@ -23,9 +23,11 @@ repository:https://github.com/lmotta/imagefootprint_plugin
 icon:footprint.svg
 
 experimental:True
-deprecated:False
+deprecated:True
 
-changelog: 1.0(2019-01-29)
+changelog: 1.1(2020-02-17)
+  Changed deprecated:True
+  - 1.0(2019-01-29)
   Migrate to QGIS 3
   - 0.1(2016-07-24)
   Start of plugin
